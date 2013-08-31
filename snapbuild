@@ -2,8 +2,9 @@
 
 # Setup
 [[ -v BASEDIR ]] || { echo "BASEDIR must be provided. Bailing!"; exit 0; }
-BINDDIR="${BINDDIR:-/binddir}"
-mkdir -p "${BINDDIR}/repo/x86_64"
+BINDDIR="${BINDDIR:-/opt/aur-builder}"
+PKGDEST="${PKGDEST:-${BINDDIR}/repo/x86_64}"
+mkdir -p "$PKGDEST"
 
 # Snapshot provided as first positional arg
 [[ $# -gt 0 ]] && { SNAPSHOT="$1"; shift; }
@@ -19,7 +20,7 @@ trap cleanup EXIT
 
 # Stop machine and whatnot
 term() {
-  machinectl terminate $SNAPSHOT
+  machinectl terminate "$SNAPSHOT"
 }
 trap term INT TERM
 
@@ -29,4 +30,4 @@ args=("$@")
 [[ ${#args[@]} -gt 0 ]] || { echo "No packages specified. Bailing!"; exit 0; }
 
 # Nspawn and do it up
-systemd-nspawn -D "$BUILDROOT" --bind="$BINDDIR" /usr/bin/env PKGDEST="${BINDDIR}/repo/x86_64" "${BINDDIR}/build.sh" "${args[@]}"
+systemd-nspawn -D "$BUILDROOT" --bind="$BINDDIR" /usr/bin/env PKGDEST="$PKGDEST" "${BINDDIR}/build.sh" "${args[@]}"

@@ -2,4 +2,5 @@
 Description=A unit which periodically updates the repo
 
 [Service]
-
+Environment=BINDDIR=/opt/aur-builder
+ExecStart=/opt/aur-builder/update
