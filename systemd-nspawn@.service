@@ -5,7 +5,6 @@ Description=Spawn a container in a btrfs snapshot
 Environment=BASEDIR=/buildroot
 Environment=BINDDIR=/binddir
 ExecStart=/binddir/snapbuild.sh %i
-#ExecStop=/usr/bin/machinectl terminate %i
 StandardInput=socket
 StandardOutput=journal
 SuccessExitStatus=1
