@@ -15,7 +15,7 @@ update() {
   turbolift -I download -s . -c evan-repo --dl-sync
 
   # Prune list
-  
+  # TODO: Write this
 
   # Update databases
   repo-add -n -s "${REPO}.db.tar.gz" *.xz

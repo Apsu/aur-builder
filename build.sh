@@ -13,37 +13,35 @@ set -e
 error() { echo "Trapped an error. Bailing!"; }
 trap error ERR
 
+# Vars and whatnot
 commonopts="--needed --noconfirm --noprogressbar"
 depopts="--asdeps"
+guard=0
 
 # Build loop
 build() {
-  # Setup Inception guard
-  guard=${guard:-0}
   ((guard++ > 5)) && { echo "Inception level 5 reached. Bailing!"; exit 0; }
 
   # Grab package dep chains
   makedeps=($(cower -ii --format %M --listdelim='\n' "$@"))
   rundeps=($(cower -ii --format %D --listdelim='\n' "$@"))
-  
+
   # Filter usefully
   repomakedeps=($(IFS=\|; expac -Ss %n "^(${makedeps[*]})$" | sort -u))
-  #repormdeps+=("${repomakedeps[@]}") # TODO: Handle dupe accumulation
   repormdeps=($(echo "${repomakedeps[@]}" "${repormdeps[@]}" | sort -u ))
   aurmakedeps=($(cower -ii --format %n --listdelim='\n' "${makedeps[@]}" | sort -u))
-  #aurrmdeps+=("${aurmakedeps[@]}") # TODO: Handle dupe accumulation
   aurrmdeps=($(echo "${aurmakedeps[@]}" "${aurrmdeps[@]}" | sort -u ))
   aurrundeps=($(cower -ii --format %n --listdelim='\n' "${rundeps[@]}" | sort -u))
-  
+
   # Install binary makedeps
   [[ ${#repomakedeps[@]} -gt 0 ]] && {
-    echo "Installing repo makedeps: ${repomakedeps[*]}" 
+    echo "Installing repo makedeps: ${repomakedeps[*]}"
     pacman -S $commonopts $depopts "${repomakedeps[@]}"
   }
-  
-  # Build/Install AUR makedeps 
+
+  # Build/Install AUR makedeps
   [[ ${#aurmakedeps[@]} -gt 0 ]] && {
-    echo "Installing AUR makedeps: ${aurmakedeps[*]}" 
+    echo "Installing AUR makedeps: ${aurmakedeps[*]}"
     for package in "${aurmakedeps[@]}"
     do
       cower -d $package
@@ -53,7 +51,7 @@ build() {
       rm -rf $package
     done
   }
-  
+
   # Build specified AUR packages
   echo "Building specified AUR packages: $*"
   for package in "$@"
@@ -64,13 +62,13 @@ build() {
     popd
     rm -rf $package
   done
-  
+
   # .. and recurse for unspecified AUR deps
   [[ ${#aurrundeps[@]} -gt 0 ]] && {
     echo "Recursing for unspecified runtime AUR deps: ${aurrundeps[*]}"
     build "${aurrundeps[@]}"
   }
-  
+
   # Remove AUR makedeps
   [[ ${#repormdeps[@]} -gt 0 ]] || [[ ${#aurrmdeps[@]} -gt 0 ]] && {
     echo "Removing makedeps we installed: ${repormdeps[*]} ${aurrmdeps[*]}"
