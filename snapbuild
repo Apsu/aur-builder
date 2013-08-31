@@ -21,7 +21,7 @@ trap cleanup EXIT
 term() {
   machinectl terminate $SNAPSHOT
 }
-trap term TERM
+trap term INT TERM
 
 # Read other args as packages or stdin if none
 args=("$@")
