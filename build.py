@@ -21,34 +21,64 @@ def callset(cmd, **kwargs):
     return set(stdout.split()) if stdout else set(), set(stderr.split()) if stderr else set(), code
 
 # Main build loop
-def build(args=set(), repomakedeps=set(), aurmakedeps=set(), guard=0):
+def build(packages=set(), repomakedeps=set(), aurmakedeps=set(), guard=0):
     if guard > 5:
         bail("Inception level 5 reached. Bailing!")
 
     # Useful options
     commonopts = shlex.split("--noconfirm --noprogressbar")
-    asdepsopts = shlex.split("--needed --asdeps ")
+    asdepsopts = shlex.split("--needed --asdeps")
     asrootopts = shlex.split("--asroot")
+    makepkgopts = commonopts + asrootopts + shlex.split("--nodeps --sign")
+    allopts = commonopts + asdepsopts + asrootopts
 
     # Query and filter
-    makedeps = callset(shlex.split("cower -qii --format %M") + list(args))[0]
-    rundeps = callset(shlex.split("cower -qii --format %D") + list(args))[0]
-    repomakedeps |= callset(shlex.split("expac -Ss %n") + ["^(" + "|".join(makedeps) + ")$"])[0]
+    makedeps = callset(shlex.split("cower -qii --format %M") + list(packages))[0]
+    rundeps = callset(shlex.split("cower -qii --format %D") + list(packages))[0]
     aurmakedeps |= callset(shlex.split("cower -qii --format %n") + list(makedeps))[0]
+    aurrundeps = callset(shlex.split("cower -qii --format %n") + list(rundeps))[0]
+    repomakedeps |= callset(shlex.split("expac -Ss %n") + ["^(" + "|".join(makedeps) + ")$"])[0]
 
+    # Add repo deps
     if repomakedeps:
         print("Installing repo makedeps:", " ".join(repomakedeps))
         stderr = call(shlex.split("pacman -S") + commonopts + asdepsopts + list(repomakedeps))[1]
         if stderr:
             print("Errors:", stderr)
 
+    # Makepkg loops
+    if aurmakedeps:
+        print("Installing AUR build deps:", " ".join(aurmakedeps))
+        for package in aurmakedeps:
+            stderr, code = call(shlex.split("cower -d") + [package])[1:3]
+            if not code:
+                bail("Error building package: {}".format(stderr))
+            stderr, code = call(shlex.split("makepkg -sri") + allopts + [package])[1:3]
+            if not code:
+                bail("Error building package: {}".format(stderr))
+
+    print("Building explicit AUR packages:", " ".join(packages))
+    for package in packages:
+        stderr, code = call(shlex.split("cower -d") + [package])[1:3]
+        if not code:
+            print("Error building package:", package)
+            continue
+        stderr, code = call(shlex.split("makepkg") + makepkgopts + [package])[1:3]
+        if not code:
+            print("Error building package:", package)
+            continue
+
+    # Remove repo deps
     if repomakedeps:
         print("Removing repo makedeps:", " ".join(repomakedeps))
         stderr = call(shlex.split("pacman -Runs") + commonopts + list(repomakedeps))[1]
         if stderr:
             print("Errors:", stderr)
 
-    #build(args, repomakedeps, aurmakedeps, guard+1)
+    # Handle implicit AUR deps
+    if aurrundeps:
+        print("Recursing for implicit AUR runtime deps:", " ".join(aurrundeps))
+        build(aurrundeps, repomakedeps, aurmakedeps, guard+1)
 
 # Entry point
 if __name__ == "__main__":
