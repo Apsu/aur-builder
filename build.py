@@ -20,12 +20,6 @@ def callset(cmd, **kwargs):
     stdout, stderr, code = call(cmd, **kwargs)
     return set(stdout.split()) if stdout else set(), set(stderr.split()) if stderr else set(), code
 
-def exists(var):
-    if var in locals() or var in globals():
-        return True
-    else:
-        return False
-
 # Main build loop
 def build(args=set(), repomakedeps=set(), aurmakedeps=set(), guard=0):
     if guard > 5:
