@@ -17,19 +17,21 @@ def dumperror(e):
     print("Stderr:", e.stderr, file=sys.stderr)
     print("Return:", e.code)
 
-def call(cmd, sets=False, exceptions=False, log=False, combine=False, **kwargs):
+def call(cmd, newlines=True, sets=False, exceptions=True, combine=False, pipe=False, **kwargs):
     """
-    Simple Popen wrapper returning stdout, stderr, returncode
+    Simple Popen wrapper returning stdout, stderr, returncode, command
+    newlines=Toggles universal_newlines
     sets=True will wrap stdout/stderr in set()
     exceptions=True will raise an exception on !0 process exit
-    log=True will log stdout/stderr to console as received
+    pipe=True will log stdout/stderr as received (and return None, None)
     combine=True will combine stderr with stdout
     """
-    with subprocess.Popen(cmd, stdout=sys.stdout if log else subprocess.PIPE, stderr=subprocess.STDOUT if combine else sys.stderr if log else subprocess.PIPE, universal_newlines=True, **kwargs) as process:
-        if log:
-            stdout, stderr = None, None
-        else:
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE if pipe else sys.stdout, stderr=subprocess.STDOUT if combine else subprocess.PIPE if pipe else sys.stderr, universal_newlines=newlines, **kwargs) as process:
+        if pipe:
             stdout, stderr = process.communicate()
+        else:
+            stdout, stderr = None, None
+            process.wait()
 
         code = process.returncode
         if exceptions and code:

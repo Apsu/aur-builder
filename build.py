@@ -3,15 +3,16 @@
 import os
 import sys
 import shlex
+import argparse
+
+# Ordered sets
+from ordered_set import OrderedSet
 
 # My utilities
 import utils
 
 # Main build loop
-def build(packages=set(), repomakedeps=set(), aurmakedeps=set(), guard=0, env={}):
-    if guard > 5:
-        utils.bail("Inception level 5 reached. Bailing!")
-
+def build(packages, env={}, quiet=False):
     # Useful options
     commonopts = shlex.split("--noconfirm --noprogressbar")
     asdepsopts = shlex.split("--needed --asdeps")
@@ -19,62 +20,95 @@ def build(packages=set(), repomakedeps=set(), aurmakedeps=set(), guard=0, env={}
     makepkgopts = commonopts + asrootopts + shlex.split("--nodeps --sign")
     allopts = commonopts + asdepsopts + asrootopts
 
-    # Query and filter
-    rundeps = utils.call(shlex.split("cower -qii --format %D") + list(packages), sets=True)[0]
-    makedeps = utils.call(shlex.split("cower -qii --format %M") + list(packages), sets=True)[0]
-    aurrundeps = utils.call(shlex.split("cower -qii --format %n") + list(rundeps), sets=True)[0]
-    aurmakedeps |= utils.call(shlex.split("cower -qii --format %n") + list(makedeps), sets=True)[0]
-    repomakedeps |= utils.call(shlex.split("expac -Ss %n") + ["^(" + "|".join(makedeps) + ")$"], sets=True)[0]
-
     try:
+        # Query and filter initial dep sets
+        if not quiet:
+            print("Getting initial dependency info for:", " ".join(packages))
+        pkgdeps = utils.call(shlex.split("cower -ii --format %M%D") + list(packages), exceptions=False, sets=True, pipe=True)[0]
+        aurdeps = utils.call(shlex.split("cower -ii --format %n") + list(pkgdeps), exceptions=False, sets=True, pipe=True)[0]
+        aurodeps = OrderedSet(aurdeps)
+        repodeps = pkgdeps - aurdeps
+
+        # Check for implicit AUR deps we need to build
+        while aurdeps:
+            if not quiet:
+                print("Checking for AUR deps in:", " ".join(aurdeps))
+            pkgdeps = utils.call(shlex.split("cower -ii --format %M%D") + list(aurdeps), exceptions=False, sets=True, pipe=True)[0]
+            aurdeps = utils.call(shlex.split("cower -ii --format %n") + list(pkgdeps), exceptions=False, sets=True, pipe=True)[0]
+
+            # Check for cyclic dependencies
+            if aurdeps & set(aurodeps):
+                print("Cyclic dependencies detected!")
+                print("Requested packages:", packages)
+                print("Detected AUR deps:", " ".join(aurodeps))
+                print("Cyclic deps:", " ".join(aurdeps & set(aurodeps)))
+                utils.bail("Bailing due to cyclic dependencies.")
+
+            # Add new deps to sets
+            aurodeps |= aurdeps
+            repodeps |= pkgdeps - aurdeps
+
         # Add repo deps
-        if repomakedeps:
-            print("Installing repo makedeps:", " ".join(repomakedeps))
-            utils.call(shlex.split("pacman -S") + commonopts + asdepsopts + list(repomakedeps), exceptions=True, log=True)
+        if repodeps:
+            if not quiet:
+                print("Installing repo deps:", " ".join(repodeps))
+            utils.call(shlex.split("pacman -S") + commonopts + asdepsopts + list(repodeps), pipe=quiet)
 
         # Makepkg loops
-        if aurmakedeps:
-            print("Installing AUR build deps:", " ".join(aurmakedeps))
-            for package in aurmakedeps:
-                utils.call(shlex.split("cower -d") + [package], exceptions=True, log=True)
-                utils.call(shlex.split("makepkg -sri") + allopts + [package], exceptions=True, log=True, cwd=package, env=env)
-                #utils.call(shlex.split("rm -rf") + [package], exceptions=True)
+        if aurodeps:
+            if not quiet:
+                print("Building/installing AUR deps:", " ".join(aurodeps))
+            utils.call(shlex.split("cower -d") + aurodeps.items, pipe=quiet)
 
-        print("Building explicit AUR packages:", " ".join(packages))
+            # Iterate in reverse since dep chain was built forward
+            for package in reversed(aurodeps):
+                utils.call(shlex.split("makepkg -si") + allopts + [package], pipe=quiet, cwd=package, env=env)
+
+        if not quiet:
+            print("Building AUR packages:", " ".join(packages))
+        utils.call(shlex.split("cower -d") + list(packages), pipe=quiet)
         for package in packages:
             try:
-                utils.call(shlex.split("cower -d") + [package], exceptions=True, log=True)
-                utils.call(shlex.split("makepkg") + makepkgopts + [package], exceptions=True, log=True, cwd=package, env=env)
-            except CallException as e:
-                print("Error building package {}:".format(package))
-                utils.dumperror(e)
-                continue
+                # We'll accept any of these failing
+                utils.call(shlex.split("makepkg") + makepkgopts + [package], pipe=quiet, cwd=package, env=env)
+                # TODO: Keep track of if
+            except utils.CallException as e:
+                if quiet:
+                    utils.dumperror(e)
+                else:
+                    print("Error building package {}:".format(package))
 
-        # Handle implicit AUR deps
-        if aurrundeps:
-            print("Recursing for implicit AUR runtime deps:", " ".join(aurrundeps))
-            build(aurrundeps, repomakedeps, aurmakedeps, guard+1, env)
     except utils.CallException as e:
-        utils.dumperror(e)
-        raise
-    finally:
-        # Remove repo deps
-        if repomakedeps:
-            print("Removing repo makedeps:", " ".join(repomakedeps))
-            utils.call(shlex.split("pacman -Runs") + commonopts + list(repomakedeps), exceptions=True, log=True)
+        if quiet:
+            utils.dumperror(e)
+        else:
+            print("CallException:", e.cmd)
 
 # Entry point
 if __name__ == "__main__":
-    try:
-        if len(sys.argv) <= 1:
-            utils.bail("Usage: {} <package> [<package> ...]".format(sys.argv[0]))
+    # Setup argument parser
+    parser = argparse.ArgumentParser(description="Build script for AUR packages", add_help=True)
+    parser.add_argument("-q", "--quiet", action="store_true", help="minimize output (default: %(default)s)")
+    parser.add_argument("-e", "--env", action="append", help="minimize output (default: %(default)s)")
+    parser.add_argument("packages", metavar="package", nargs="+", help="AUR package(s) to build")
 
-        # Build
-        print("Environment:", os.environ)
-        build(set(sys.argv[1:]), env=os.environ)
+    # Parse args
+    args = parser.parse_args()
+
+    try:
+        # Reformat env vars
+        os.environ.update(dict(map(lambda s: s.split("="), args.env)))
+
+        # cd somewhere out of /
+        if "HOME" in os.environ:
+            os.chdir(os.environ["HOME"])
+        else:
+            os.chdir("/opt")
+
+        print(os.environ)
+        build(set(args.packages), env=os.environ, quiet=args.quiet)
     except Exception as e:
-        print("Caught exception:")
-        print(e.args)
+        print("Caught exception:", e)
         exit(1)
     else:
         exit(0)
