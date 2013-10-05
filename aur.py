@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
+"""
+Arch Linux AUR Builder
+
+Build a list of AUR packages
+
+Usage:
+  aur.py [--help] [--version] [--quiet] [--dest=<path>] <packages>...
+
+Arguments:
+  <packages>...            Package(s) to build
+
+Options:
+  -h --help                Show this message
+  -v --version             Show version
+  -q --quiet               Minimize output [default: False]
+  -d <path> --dest=<path>  Path to package build destination [default: /opt/build/repo]
+
+"""
 
 import os
 import sys
 import shlex
 import argparse
 
-# Ordered sets
+from docopt import docopt
 from ordered_set import OrderedSet
 
 # My utilities
@@ -13,6 +31,8 @@ import utils
 
 # Main build loop
 def build(packages, env={}, quiet=False):
+    print("Environment:", env)
+
     # Useful options
     commonopts = shlex.split("--noconfirm --noprogressbar")
     asdepsopts = shlex.split("--needed --asdeps")
@@ -38,10 +58,11 @@ def build(packages, env={}, quiet=False):
 
             # Check for cyclic dependencies
             if aurdeps & set(aurodeps):
-                print("Cyclic dependencies detected!")
-                print("Requested packages:", packages)
-                print("Detected AUR deps:", " ".join(aurodeps))
-                print("Cyclic deps:", " ".join(aurdeps & set(aurodeps)))
+                if not quiet:
+                    print("Cyclic dependencies detected!")
+                    print("Requested packages:", packages)
+                    print("Detected AUR deps:", " ".join(aurodeps))
+                    print("Cyclic deps:", " ".join(aurdeps & set(aurodeps)))
                 utils.bail("Bailing due to cyclic dependencies.")
 
             # Add new deps to sets
@@ -86,27 +107,29 @@ def build(packages, env={}, quiet=False):
 
 # Entry point
 if __name__ == "__main__":
-    # Setup argument parser
-    parser = argparse.ArgumentParser(description="Build script for AUR packages", add_help=True)
-    parser.add_argument("-q", "--quiet", action="store_true", help="minimize output (default: %(default)s)")
-    parser.add_argument("-e", "--env", action="append", help="minimize output (default: %(default)s)")
-    parser.add_argument("packages", metavar="package", nargs="+", help="AUR package(s) to build")
-
-    # Parse args
-    args = parser.parse_args()
+    opts = docopt(__doc__, version="AUR builder 0.5.0")
 
     try:
-        # Reformat env vars
-        os.environ.update(dict(map(lambda s: s.split("="), args.env)))
+        # Parse opts
+        dest = os.path.abspath(opts["--dest"])
+        quiet = opts["--quiet"]
+        packages = set(opts["<packages>"])
 
-        # cd somewhere out of /
-        if "HOME" in os.environ:
-            os.chdir(os.environ["HOME"])
-        else:
-            os.chdir("/opt")
+        # Set PKGDEST
+        os.environ.update({"PKGDEST": dest})
 
-        print(os.environ)
-        build(set(args.packages), env=os.environ, quiet=args.quiet)
+        # Add path for pod2man and similar perl bits
+        os.environ.update({"PATH": os.environ["PATH"] + ":/usr/bin/core_perl"})
+
+        # cd out of /
+        os.mkdir("/opt/build")
+        os.chdir("/opt/build")
+
+        # idempotently mkdir destination
+        os.makedirs(dest, exist_ok=True)
+
+        # .doit!
+        build(packages, env=os.environ, quiet=quiet)
     except Exception as e:
         print("Caught exception:", e)
         exit(1)

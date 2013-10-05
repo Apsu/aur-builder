@@ -4,43 +4,92 @@ import os
 import sys
 import uuid
 import shlex
-import argparse
 
-# My utilities
 import utils
+
+from docopt import docopt
+
+__doc__ = """
+Btrfs snapshot container builderator
+
+Creates a unique (UUID) snapshot of a bootstrapped buildroot then spawns a
+builder in it
+
+Usage:
+  {0} [--help] [--version] [--quiet] [--log=<file>]
+      [--root=<path>] [--bind=<path>] [--dest=<path>]
+      <builder> [<args>...]
+
+Options:
+  -h --help                Show this message
+  -v --version             Show version
+  -q --quiet               Minimize output [default: False]
+  -l <file> --log=<file>   Log output to specified file
+  -r <path> --root=<path>  Path to btrfs volume for build snapshots [default: /opt/buildroot/arch]
+  -b <path> --bind=<path>  Path to bind point for build container [default: .]
+
+Parameters:
+  <builder>                Builder to use [default: aur]
+  <args>...                Arguments to builder
+
+Builders:
+  aur                      Arch Linux AUR
+
+See '{0} <builder> --help' for more information on a specific builder
+
+""".format(os.path.basename(sys.argv[0]))
 
 # Entry point
 if __name__ == "__main__":
-    # Setup argument parser
-    parser = argparse.ArgumentParser(description="Snapshot and spawn build script for packages", add_help=True)
-    parser.add_argument("-l", "--log", nargs="?", type=argparse.FileType("w"), default=sys.stdout, help="log output to specified file (default: stdout)")
-    parser.add_argument("-r", "--root", nargs="?", default="/opt/buildroot", help="path to btrfs volume for build snapshots (default: %(default)s)")
-    parser.add_argument("-s", "--snapshot", nargs="?", default=uuid.uuid4(), help="name to use for build snapshot (default: %(default)s)")
-    parser.add_argument("-b", "--bind", nargs="?", default=os.getcwd(), help="path to bind point for build container (default: %(default)s)")
-    parser.add_argument("-x", "--builder", nargs="?", default="build.py", help="build script to execute (default: %(default)s)")
-    parser.add_argument("-q", "--quiet", action="store_true", help="minimize output (default: %(default)s)")
-    parser.add_argument("packages", metavar="package", nargs="+", help="package(s) to build")
-
-    # Parse args, capture any extra
-    args, extra = parser.parse_known_args()
+    opts = docopt(__doc__, options_first=True, version="snapbuild 0.3.0")
+    print(opts)
 
     try:
-        # Redirect sys.stdout
-        sys.stdout = args.log
+        # Get output opts
+        log = opts["--log"]
+        quiet = opts["--quiet"]
 
-        # Clean snapshot args and do it
-        root = os.path.abspath(args.root)
-        snapshot = os.path.join(root, os.path.normpath(str(args.snapshot).replace("/", "-")))
-        utils.call(shlex.split("btrfs sub snap {} {}".format(root, snapshot)), pipe=args.quiet)
+        # Get snapshot args and clean buildroot
+        root = os.path.abspath(opts["--root"])
+        snapshot = os.path.join(root, str(uuid.uuid4()))
 
         # Clean bindpoint and prepare command to execute
-        bind = os.path.abspath(args.bind)
-        builder = os.path.join(bind, args.builder)
+        bind = os.path.abspath(opts["--bind"])
+        builder = opts["<builder>"]
+        build = "{}.py".format(os.path.join(bind, builder))
+        args = opts["<args>"]
 
-        # Spawn build script
-        utils.call(shlex.split("systemd-nspawn -D {} --bind={} {}".format(snapshot, bind, builder)) + (["-q"] if args.quiet else []) + extra + list(args.packages), pipe=args.quiet)
+        # Redirect sys.stdout to logfile
+        if log:
+            sys.stdout = open(log, "a")
+
+    except OSError as e:
+        print("Error opening logfile:", log)
+        print("Exception:", e)
+        exit(1)
+    except Exception as e:
+        print("Error parsing args:", args)
+        print("Exception:", e)
+        exit(2)
+
+    try:
+        if not args or "-h" in args:
+            utils.call(shlex.split("{} -h".format(build)), pipe=False)
+        else:
+            # Snap it
+            utils.call(shlex.split("btrfs sub snap {} {}".format(root, snapshot)), stdout=not quiet, pipe=quiet)
+
+            # Spawn build script
+            try:
+                # Ignore --quiet if -h is passed
+                # Toss stderr if --quiet is passed
+                # Pass dest to builder via -d <dest>
+                utils.call(shlex.split("systemd-nspawn -D {} --bind={} {}".format(snapshot, bind, build)) + args, stderr=not quiet, pipe=quiet)
+            # Since we made it to this try block, make sure we delete snapshot
+            finally:
+                utils.call(shlex.split("btrfs sub delete {}".format(snapshot)), stdout=not quiet, pipe=quiet)
     except utils.CallException as e:
-        if args.quiet:
+        if quiet:
             utils.dumperror(e)
         else:
             print("CallException:", e.cmd)
@@ -49,5 +98,3 @@ if __name__ == "__main__":
         exit(1)
     else:
         exit(0)
-    finally:
-        utils.call(shlex.split("btrfs sub del {}".format(snapshot)), exceptions=False, pipe=args.quiet)
